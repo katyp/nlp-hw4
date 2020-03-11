@@ -161,10 +161,6 @@ class NMT(nn.Module):
 
         return
 
-    CFLAGS="-I/usr/local/opt/openssl/include" \
-LDFLAGS="-/usr/local/opt/openssl/lib" \
-pyenv install -v 3.4.3
-
         # src_padded: src_len, b. X: src_len, b, e = self.embed_size
         # END YOUR CODE
 
