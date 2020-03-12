@@ -154,7 +154,7 @@ class NMT(nn.Module):
 
         pdb.set_trace()
         src_len, b = source_padded.size()
-        X = self.src_embeddings(source_padded)
+        X = self.source_embeddings(source_padded)
 
         h0, c0 = _initialize_hiddens()
         # [src_len x b x e] --> packed_sequence
