@@ -153,18 +153,51 @@ class NMT(nn.Module):
         #         https://pytorch.org/docs/stable/tensors.html#torch.Tensor.permute
 
         pdb.set_trace()
-        src_len, b = source_padded.size()[0]
-        X = self.Linear(src_len, b, self.embed_size)
+        src_len, b = source_padded.size()
+        X = self.src_embeddings(source_padded)
 
-        for i in range(e):
-            None
+        h0, c0 = _initialize_hiddens()
+        # [src_len x b x e] --> packed_sequence
+        # input should be src_len x b x dimension (*=dim=self.embedding_size)
+        # lengths: source_lengths
+        packed_input = torch.nn.pack_padded_sequence(X, source_lengths)
+        # do some unpacking I guess. encoder is an LSTM, so:
+        # seq_len, batch, input_size
+        output, (hn, cn) = self.encoder(packed_input, (h0, c0))
+        padded_output = torch.nn.pad_packed_sequence(output, source_lengths)
 
-        return
+        # self.encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True)
 
-        # src_padded: src_len, b. X: src_len, b, e = self.embed_size
+        # hn: (num_layers * 2, batch, hidden_size)
+        # cn: (num_layers * 2, batch, hidden_size)
+        #   -- hn, cn: for every layer (first to last): 5 batches, hsize say 20
+        # output: seq_len, batch, hidden_size
+        #   -- output: sentence length, 5 batches, hsize say 20
+
+        num_sentences = len(source_lengths)
+
+        enc_hiddens = hn            # [per-layer x b x hsize]
+        init_decoder_hidden = h_i_enc(hn, num_sentences - 2)    # [b x hsize] make last_hidden for *each* sentence in *each* batch
+        init_decoder_cell = h_i_enc(cn, num_sentences - 2)
+
+        dec_init_state = (init_decoder_hidden, init_decoder_cell)
+
         # END YOUR CODE
 
-        # return enc_hiddens, dec_init_state
+        return enc_hiddens, dec_init_state
+
+    def _initialize_hiddens():
+        return (torch.zeroes(self.hidden_size), torch.zeroes(self.hidden_size))
+    def h_i_enc(i, hidden_states):
+        # forward is i*2, bwd is i*2 + 1
+        i_fwd = 2*i
+        i_bwd = 2*i + 1
+        # [batch x hsize]
+        fwd = hidden_states[i_fwd]
+        bwd = hidden_states[i_fwd]
+
+        h_i_enc = nn.cat((fwd, bwd), 1)
+        return h_i_enc
 
     def decode(self, enc_hiddens: torch.Tensor, enc_masks: torch.Tensor,
                dec_init_state: Tuple[torch.Tensor, torch.Tensor],
