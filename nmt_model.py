@@ -115,6 +115,19 @@ class NMT(nn.Module):
         scores = target_gold_words_log_prob.sum(dim=0)
         return scores
 
+    def _initialize_hiddens():
+        return (torch.zeroes(self.hidden_size), torch.zeroes(self.hidden_size))
+    def _h_i_enc(i, hidden_states):
+        # forward is i*2, bwd is i*2 + 1
+        i_fwd = 2*i
+        i_bwd = 2*i + 1
+        # [batch x hsize]
+        fwd = hidden_states[i_fwd]
+        bwd = hidden_states[i_fwd]
+
+        h_i_enc = nn.cat((fwd, bwd), 1)
+        return h_i_enc
+
     def encode(self, source_padded: torch.Tensor,
                source_lengths: List[int]) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """ Apply the encoder to source sentences to obtain encoder hidden states.
@@ -177,27 +190,14 @@ class NMT(nn.Module):
         num_sentences = len(source_lengths)
 
         enc_hiddens = hn            # [per-layer x b x hsize]
-        init_decoder_hidden = h_i_enc(hn, num_sentences - 2)    # [b x hsize] make last_hidden for *each* sentence in *each* batch
-        init_decoder_cell = h_i_enc(cn, num_sentences - 2)
+        init_decoder_hidden = _h_i_enc(hn, num_sentences - 2)    # [b x hsize] make last_hidden for *each* sentence in *each* batch
+        init_decoder_cell = _h_i_enc(cn, num_sentences - 2)
 
         dec_init_state = (init_decoder_hidden, init_decoder_cell)
 
         # END YOUR CODE
 
         return enc_hiddens, dec_init_state
-
-    def _initialize_hiddens():
-        return (torch.zeroes(self.hidden_size), torch.zeroes(self.hidden_size))
-    def h_i_enc(i, hidden_states):
-        # forward is i*2, bwd is i*2 + 1
-        i_fwd = 2*i
-        i_bwd = 2*i + 1
-        # [batch x hsize]
-        fwd = hidden_states[i_fwd]
-        bwd = hidden_states[i_fwd]
-
-        h_i_enc = nn.cat((fwd, bwd), 1)
-        return h_i_enc
 
     def decode(self, enc_hiddens: torch.Tensor, enc_masks: torch.Tensor,
                dec_init_state: Tuple[torch.Tensor, torch.Tensor],
