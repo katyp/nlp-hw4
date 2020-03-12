@@ -115,17 +115,26 @@ class NMT(nn.Module):
         scores = target_gold_words_log_prob.sum(dim=0)
         return scores
 
-    def _initialize_hiddens():
-        return (torch.zeroes(self.hidden_size), torch.zeroes(self.hidden_size))
-    def _h_i_enc(i, hidden_states):
-        # forward is i*2, bwd is i*2 + 1
-        i_fwd = 2*i
-        i_bwd = 2*i + 1
-        # [batch x hsize]
-        fwd = hidden_states[i_fwd]
-        bwd = hidden_states[i_fwd]
+    def _initialize_hidden(self, batch_size):
+        layers = 2
+        batches = batch_size
+        hidden_size = self.hidden_size
+        return torch.zeros(layers, batches, hidden_size)
 
-        h_i_enc = nn.cat((fwd, bwd), 1)
+    # hidden_states: [layer(2)xbatch(5)xhsize(3)]
+    # want just h0_fwd and h0_bwd, so [3] cat [3]. But probs batch x 6
+    def _h_i_enc(self, hidden_states):
+        batch_size, hsize = hidden_states[0].size()
+
+        # hsv = hidden_states.view(num_layers, num_directions, batch, hidden_size)
+        # [1, 2, 5, 3] where hsv[:,0,:,:] is states for fwd and hsv[:,1,:,:] is states for bwd
+        hsv = hidden_states.view(1, 2, batch_size, hsize)
+
+        # [batch x hsize]
+        fwd = hsv[0,0] # [5x3]
+        bwd = hsv[0,1] # [5x3]
+        h_i_enc = torch.cat((fwd, bwd), 1) # [batch x 2*hidden_size]
+
         return h_i_enc
 
     def encode(self, source_padded: torch.Tensor,
@@ -165,19 +174,26 @@ class NMT(nn.Module):
         #     Tensor Permute:
         #         https://pytorch.org/docs/stable/tensors.html#torch.Tensor.permute
 
-        pdb.set_trace()
         src_len, b = source_padded.size()
         X = self.source_embeddings(source_padded)
 
-        h0, c0 = _initialize_hiddens()
+        h0 = self._initialize_hidden(b)
+        c0 = self._initialize_hidden(b)
+
         # [src_len x b x e] --> packed_sequence
         # input should be src_len x b x dimension (*=dim=self.embedding_size)
         # lengths: source_lengths
-        packed_input = torch.nn.pack_padded_sequence(X, source_lengths)
-        # do some unpacking I guess. encoder is an LSTM, so:
-        # seq_len, batch, input_size
+        packed_input = torch.nn.utils.rnn.pack_padded_sequence(X, source_lengths)
+
+        #
+        # LSTM
+        #
+        # INPUT: seq_len (words per sentence: ~15?), batch, input_size (embeddings: 3)
+        # H0: num_layers * num_directions (2), batch, hidden_size (also 3)
         output, (hn, cn) = self.encoder(packed_input, (h0, c0))
-        padded_output = torch.nn.pad_packed_sequence(output, source_lengths)
+
+        # List of (Tensor(20,5,6), seq_lengths)
+        padded_output = torch.nn.utils.rnn.pad_packed_sequence(output)
 
         # self.encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True)
 
@@ -185,14 +201,19 @@ class NMT(nn.Module):
         # cn: (num_layers * 2, batch, hidden_size)
         #   -- hn, cn: for every layer (first to last): 5 batches, hsize say 20
         # output: seq_len, batch, hidden_size
-        #   -- output: sentence length, 5 batches, hsize say 20
+        #   -- output: sentence length (20), batches (5), hsize (3)
 
         num_sentences = len(source_lengths)
 
-        enc_hiddens = hn            # [per-layer x b x hsize]
-        init_decoder_hidden = _h_i_enc(hn, num_sentences - 2)    # [b x hsize] make last_hidden for *each* sentence in *each* batch
-        init_decoder_cell = _h_i_enc(cn, num_sentences - 2)
+        # Should be batch (5) x source_len (20) x 6
+        # Should be 5x20x6, but is 2x5x3
+        enc_hiddens = torch.transpose(padded_output[0], 0, 1)
 
+        # Should be 5x3
+        init_decoder_hidden = self.h_projection(self._h_i_enc(hn))
+        init_decoder_cell = self.c_projection(self._h_i_enc(cn))
+
+        # init_state should be 5x3, got 5x6
         dec_init_state = (init_decoder_hidden, init_decoder_cell)
 
         # END YOUR CODE
@@ -215,7 +236,7 @@ class NMT(nn.Module):
         @returns combined_outputs (Tensor): combined output tensor  (tgt_len, b,  h), where
                                         tgt_len = maximum target sentence length, b = batch_size,  h = hidden size
         """
-        # Chop of the <END> token for max length sentences.
+        # Chop off the <END> token for max length sentences.
         target_padded = target_padded[:-1]
 
         # Initialize the decoder state (hidden and cell)
@@ -256,6 +277,9 @@ class NMT(nn.Module):
         #         https://pytorch.org/docs/stable/torch.html#torch.cat
         #     Tensor Stacking:
         #         https://pytorch.org/docs/stable/torch.html#torch.stack
+
+        # [h x 2h] * [b x src_len x h]
+         enc_hiddens_proj = self.att_projection(enc_hiddens)
 
         # END YOUR CODE
         return combined_outputs

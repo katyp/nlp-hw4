@@ -14,6 +14,8 @@ import torch
 import torch.nn as nn
 import torch.nn.utils
 
+import pdb
+
 BATCH_SIZE = 5
 EMBED_SIZE = 3
 HIDDEN_SIZE = 3
