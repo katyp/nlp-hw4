@@ -255,6 +255,7 @@ class NMT(nn.Module):
         #         which should be shape (b, src_len, h),
         #         where b = batch size, src_len = maximum source length, h = hidden size.
         #         This is applying W_{attProj} to h^enc, as described in the PDF.
+        #                           \/ just this *one* target sentence, right? But in 5 batches?
         #     2. Construct tensor `Y` of target sentences with shape (tgt_len, b, e) using the target model embeddings.
         #         where tgt_len = maximum target sentence length, b = batch size, e = embedding size.
         #     3. Use the torch.split function to iterate over the time dimension of Y.
@@ -278,8 +279,57 @@ class NMT(nn.Module):
         #     Tensor Stacking:
         #         https://pytorch.org/docs/stable/torch.html#torch.stack
 
-        # [h x 2h] * [b x src_len x h]
-         enc_hiddens_proj = self.att_projection(enc_hiddens)
+        src_len = enc_hiddens.size()[1]
+        # [h x 2h] * [b x src_len x 2h] SHOULD YIELD [b x src_len x h]?
+
+        #
+        # TODO check if this needs to include h_t_dec^T
+        #
+        enc_hiddens_proj = self.att_projection(enc_hiddens)
+
+        # Associate sentences from target_padded with their embeddings
+        # [tgt_length x b] --> [tgt_len x b x e] (20 words x 5 batches x 3 features)
+        Y = self.target_embeddings(target_padded)
+
+        # Iterate over time dimension of Y (words in a sentence) PDF HAS THIS AS [h x 1]
+        o_prev = torch.zeros(batch_size, self.hidden_size)
+        # [20 x 5 x 3] --> [1 x 5 x 3]
+        tensors_per_word = torch.split(Y, 1, 0) # [1x5x3] Splits it into # of words pieces, retaining each batch and features
+
+        # Processing one word at a time, but for each of 5 batches
+        for i in range(len(tensors_per_word)):
+            # [1 x 5 x 3] aka [1 x b x e]. EACH Y_t in the pdf is [e x 1]
+            word_i = Y_t = tensors_per_word[i]
+            #   [h+e x b x 1] =  [1 x b x e] + [h x b x 1]
+            # TODO make this [b x h+e]
+
+            # Y_t: [1 x b x e]; o_prev: [b x h]
+            Y_t_squeezed = Y_t.squeeze(0)
+            Ybar_t = torch.cat((Y_t_squeezed, o_prev), 1) # [b x e+h]
+
+            #
+            # STEP FUNCTION
+            #
+
+            # TODO probably need enc_hiddens_proj to be a different size
+
+            # PARAMS:
+            #       [b, e+h]; ([b x h], [b x h]]); [b, src_len, h*2]; [b x src_length]
+            # RETURNS:
+            #       1) c/h tuple [b x h], 2) combined_output [b x h], 3) e_t [b x src_len]
+            hidden_states, combined_output, e_t = self.step(Ybar_t, dec_init_state, enc_hiddens, enc_hiddens_proj, enc_masks)
+
+            hidden, cell = hidden_states            # hidden state from the decoder for sentence t
+            o_t = combined_output
+
+            combined_outputs = combined_outputs + [o_t]
+            o_prev = o_t
+
+        #   4. Use torch.stack to convert combined_outputs from a list length tgt_len of
+        #      tensors shape (b, h), to a single tensor shape (tgt_len, b, h)
+        #      where tgt_len = maximum target sentence length, b = batch size, h = hidden size.
+        # combined_outputs: [ (b x h) x number of words ]
+        combined_outputs = torch.stack(combined_outputs, 0)
 
         # END YOUR CODE
         return combined_outputs
