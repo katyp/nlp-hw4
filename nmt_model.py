@@ -372,7 +372,7 @@ class NMT(nn.Module):
         # TODO:
         #     1. Apply the decoder to `Ybar_t` and `dec_state`to obtain the new dec_state.
         #     2. Split dec_state into its two parts (dec_hidden, dec_cell)
-        #     3. Compute the attention scores e_t, a Tensor shape (b, src_len).
+        #     3. Compute the attention scores e_t [src_len*2h*1], and alpha, a Tensor shape (b, src_len).
         #        Note: b = batch_size, src_len = maximum source length, h = hidden size.
         #
         #       Hints:
@@ -390,6 +390,22 @@ class NMT(nn.Module):
         #         https://pytorch.org/docs/stable/torch.html#torch.unsqueeze
         #     Tensor Squeeze:
         #         https://pytorch.org/docs/stable/torch.html#torch.squeeze
+
+        # Input: b x e+h, dec_state: ([b x h], [b x h])
+        dec_state = dec_hidden, dec_cell = self.decoder(Ybar_t, dec_state) # ([b x h], [b x h])
+
+        #
+        # COMPUTE E_T
+        #
+
+        term1 = dec_hidden.unsqueeze(1)                 # [b x h] --> [b x 1 x h]
+        term2 = enc_hiddens_proj                        # [b x src_len x h]
+        term2 = torch.transpose(term2, 1, 2)            # [b x h x src_len]
+
+        e_t = torch.bmm(term1, term2)                   # [b x 1 x h] * [b x h x src_len] = [b x 1 x src_len]
+        # Supposedly *should* be [src_len x 2h x 1]
+        e_t = e_t.squeeze(1)                            # [b x 1 x src_len] --> [b x src_len]
+
 
         # END YOUR CODE
 
@@ -423,6 +439,19 @@ class NMT(nn.Module):
         #         https://pytorch.org/docs/stable/torch.html#torch.cat
         #     Tanh:
         #         https://pytorch.org/docs/stable/torch.html#torch.tanh
+
+        #
+        # COMPUTE A
+        #
+        alpha_t = torch.nn.functional.softmax(e_t, 1)              # [b x src_len]
+        alpha_t = alpha_t.unsqueeze(1)                  # [b x 1 x src_len]
+        a_t = torch.bmm(alpha_t, enc_hiddens)                 # [b,1,sl]*[b,sl,2h] -> [b,1,2h]
+        a_t = a_t.squeeze(1)                            # [b,1,2h] -> [b,2h]
+
+        U_t = torch.cat((dec_hidden, a_t), 1)           # [b x h] + [b x 2h] = [b x 3h]
+        V_t = self.combined_output_projection(U_t)           # [h x 3h] * [b x 3h (x 1)] -> [b x h (x 1)]
+
+        O_t = self.dropout( torch.tanh(V_t) )
 
         # END YOUR CODE
 
