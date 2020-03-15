@@ -20,7 +20,7 @@ class NMT(nn.Module):
         - Unidirection LSTM Decoder
         - Global Attention Model (Luong, et al. 2015)
     """
-    def __init__(self, embed_size, hidden_size_enc, hidden_size_dec, vocab, dropout_rate=0.2):
+    def __init__(self, embed_size, hidden_size_enc, hidden_size_dec, vocab, attention_function_name, dropout_rate=0.2):
         """ Init NMT Model.
 
         ********** IMPORTANT ***********
@@ -32,6 +32,8 @@ class NMT(nn.Module):
         @param hidden_size_dec (int): Hidden Size (dimensionality) of the decoder
         @param vocab (Vocab): Vocabulary object containing src and tgt languages
                               See vocab.py for documentation.
+        @param attention_function_name (string):    One of ["MULTIPLICATIVE", "ADDITIVE",
+                                                    or "DOT_PRODUCT"]
         @param dropout_rate (float): Dropout probability, for attention
 
         """
@@ -65,6 +67,14 @@ class NMT(nn.Module):
         # LSTM Cell with bia
         self.decoder = nn.LSTMCell(embed_size + hidden_size_dec, hidden_size_dec)
 
+        # Attention calculations
+        self.attention_switcher = {
+            "MULTIPLICATIVE":   self.calculate_multiplicative_attention,
+            "ADDITIVE":         self.calculate_additive_attention,
+            "DOT_PRODUCT":      self.calculate_dot_product_attention
+        }
+        self.attention_function = self.attention_switcher[attention_function_name]
+
         # Linear Layer with no bias), called W_{h} in the PDF.
         self.h_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
         # Linear Layer with no bias), called W_{c} in the PDF.
@@ -72,7 +82,7 @@ class NMT(nn.Module):
         # Linear Layer with no bias), called W_{attProj} in the PDF.
         self.att_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
         # Linear Layer with no bias), called W_{u} in the PDF.
-        self.combined_output_projection = nn.Linear(hidden_size_enc * 2 + hidden_size_dec, hidden_size_dec, bias=False)
+        self.combined_output_projection = nn.Linear(hidden_size_enc * 2 + hidden_size_dec, hidden_size_enc, bias=False)
         # Linear Layer with no bias), called W_{vocab} in the PDF.
         self.target_vocab_projection = nn.Linear(hidden_size_dec, len(vocab.tgt), bias=False)
         # Dropout Layer
@@ -415,13 +425,12 @@ class NMT(nn.Module):
         # COMPUTE E_T
         #
 
-        term1 = dec_hidden.unsqueeze(1)                 # [b x h] --> [b x 1 x h]
-        term2 = enc_hiddens_proj                        # [b x src_len x h]
-        term2 = torch.transpose(term2, 1, 2)            # [b x h x src_len]
 
-        e_t = torch.bmm(term1, term2)                   # [b x 1 x h] * [b x h x src_len] = [b x 1 x src_len]
-        # Supposedly *should* be [src_len x 2h x 1]
-        e_t = e_t.squeeze(1)                            # [b x 1 x src_len] --> [b x src_len]
+        #
+        # Compute attention e_t
+        #
+
+        e_t = self.attention_function(dec_hidden, enc_hiddens_proj)
 
 
         # END YOUR CODE
@@ -622,3 +631,39 @@ class NMT(nn.Module):
         }
 
         torch.save(params, path)
+
+    #
+    # Attention functions
+    #
+
+
+    # at_dec * attproj(hi_enc)
+    # s = dec_hidden, hi = enc_hiddens_proj
+    def calculate_multiplicative_attention(self, dec_hidden, enc_hiddens_proj):
+        term1 = dec_hidden.unsqueeze(1)                 # [b x h] --> [b x 1 x h]
+        term2 = enc_hiddens_proj                        # [b x src_len x h]
+        term2 = torch.transpose(term2, 1, 2)            # [b x h x src_len]
+
+        e_t = torch.bmm(term1, term2)                   # [b x 1 x h] * [b x h x src_len] = [b x 1 x src_len]
+        e_t = e_t.squeeze(1)                            # [b x 1 x src_len] --> [b x src_len]
+
+        # Supposedly *should* be [src_len x 2h x 1]
+        return e_t
+
+
+    # s is h_t_dec
+    # Vt * tanh(W1*s + W2*h_i)
+    def calculate_additive_attention(self, dec_hidden, enc_hiddens_proj):
+        term1 = self.additive_att_projection1(dec_hidden)   # TODO define these
+        term2 = self.att_projection(term1)                  # " " "
+        e_t = torch.add(term1, term2)                       # TODO look up real add function
+        e_t = tanh(e_t)
+        # TODO: multiply this by Vt (can we even calculate that yet??)
+
+        return e_t
+
+    def calculate_dot_product_attention(self, dec_hidden, enc_hiddens_proj):
+        e_t = torch.dot(dec_hidden, enc_hiddens_proj)       # TODO make this a real dot prod
+        # e = st dot hi
+
+        return e_t
