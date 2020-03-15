@@ -1,0 +1,33 @@
+1.4) "Report how many word types..."
+
+  2.7.0 :002 > require 'json'
+   => true 
+  2.7.0 :003 > jj = File.new("vocab.json")
+  2.7.0 :004 > js = jj.read()
+  2.7.0 :005 > jp = JSON.parse js
+  2.7.0 :006 > jp.count
+   => 2 
+  2.7.0 :007 > jp.keyts
+  Traceback (most recent call last):
+          4: from /Users/katy/.rvm/rubies/ruby-2.7.0/bin/irb:23:in `<main>'
+          3: from /Users/katy/.rvm/rubies/ruby-2.7.0/bin/irb:23:in `load'
+          2: from /Users/katy/.rvm/rubies/ruby-2.7.0/lib/ruby/gems/2.7.0/gems/irb-1.2.1/exe/irb:11:in `<top (required)>'
+          1: from (irb):7
+  NoMethodError (undefined method `keyts' for #<Hash:0x00007ff824b90a68>)
+  Did you mean?  keys
+                 key
+                 key?
+  2.7.0 :008 > jp.keys
+   => ["src_word2id", "tgt_word2id"] 
+  2.7.0 :009 > jp["src_word2id"].lenth
+  Traceback (most recent call last):
+          4: from /Users/katy/.rvm/rubies/ruby-2.7.0/bin/irb:23:in `<main>'
+          3: from /Users/katy/.rvm/rubies/ruby-2.7.0/bin/irb:23:in `load'
+          2: from /Users/katy/.rvm/rubies/ruby-2.7.0/lib/ruby/gems/2.7.0/gems/irb-1.2.1/exe/irb:11:in `<top (required)>'
+          1: from (irb):9
+  NoMethodError (undefined method `lenth' for #<Hash:0x00007ff824b90a18>)
+  Did you mean?  length
+  2.7.0 :010 > jp["src_word2id"].length
+   => 1309 
+  2.7.0 :011 > jp["tgt_word2id"].length
+   => 1280 

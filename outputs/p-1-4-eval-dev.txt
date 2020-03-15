@@ -1,0 +1,6 @@
+load test source sentences from [data/dev.fr]
+load test target sentences from [data/dev.en]
+load model from model.bin
+Decoding: 100% 485/485 [00:19<00:00, 24.96it/s]
+Corpus BLEU: 1.2439229424117288
+Saving predictions to dev.out
