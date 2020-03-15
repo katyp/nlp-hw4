@@ -65,7 +65,7 @@ class NMT(nn.Module):
         # Bidirectional LSTM with bias
         self.encoder = nn.LSTM(embed_size, hidden_size_enc, bidirectional=True)
         # LSTM Cell with bia
-        self.decoder = nn.LSTMCell(embed_size + hidden_size_dec, hidden_size_dec)
+        self.decoder = nn.LSTMCell(embed_size + hidden_size_enc, hidden_size_dec)
 
         # Attention calculations
         self.attention_switcher = {
@@ -79,16 +79,23 @@ class NMT(nn.Module):
         self.h_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
         # Linear Layer with no bias), called W_{c} in the PDF.
         self.c_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
-        # Linear Layer with no bias), called W_{attProj} in the PDF.
-        self.att_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
+        # Linear Layer with no bias), called W_{attProj} in the PDF. Also W2 in additive attention
+        if self.attention_function == self.calculate_dot_product_attention:
+            self.att_projection = None
+        else:
+            self.att_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
+        # Linear layer for additive attention (W1)
+        self.additive_att_projection1 = nn.Linear(hidden_size_dec, hidden_size_dec)
+        # Linear layer for summed additive attention (V^T)
+        self.additive_att_sum_projection = nn.Linear(hidden_size_dec, 1)
         # Linear Layer with no bias), called W_{u} in the PDF.
         self.combined_output_projection = nn.Linear(hidden_size_enc * 2 + hidden_size_dec, hidden_size_enc, bias=False)
         # Linear Layer with no bias), called W_{vocab} in the PDF.
-        self.target_vocab_projection = nn.Linear(hidden_size_dec, len(vocab.tgt), bias=False)
+        self.target_vocab_projection = nn.Linear(hidden_size_enc, len(vocab.tgt), bias=False)
         # Dropout Layer
         self.dropout = nn.Dropout(self.dropout_rate)
 
-    def forward(self, source: List[List[str]], target: List[List[str]]) -> torch.Tensor:
+    def forward(self, source: List[List[str]], target: List[List[str]]) -> torch.tensor:
         """ Take a mini-batch of source and target sentences, compute the log-likelihood of
         target sentences under the language models learned by the NMT system.
 
@@ -116,7 +123,7 @@ class NMT(nn.Module):
         enc_hiddens, dec_init_state = self.encode(source_padded, source_lengths)
         enc_masks = self.generate_sent_masks(enc_hiddens, source_lengths)
         combined_outputs = self.decode(enc_hiddens, enc_masks, dec_init_state, target_padded)
-        # combined_outputs: (tgt_len, b,  h_out)
+        # combined_outputs: (tgt_len, b,  h_enc)
         P = F.log_softmax(self.target_vocab_projection(combined_outputs), dim=-1)
 
         # Zero out, probabilities for which we have nothing in the target text
@@ -151,8 +158,8 @@ class NMT(nn.Module):
 
         return h_i_enc
 
-    def encode(self, source_padded: torch.Tensor,
-               source_lengths: List[int]) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def encode(self, source_padded: torch.tensor,
+               source_lengths: List[int]) -> Tuple[torch.tensor, Tuple[torch.tensor, torch.tensor]]:
         """ Apply the encoder to source sentences to obtain encoder hidden states.
             Additionally, take the final states of the encoder and project them to obtain initial states for decoder.
 
@@ -237,9 +244,9 @@ class NMT(nn.Module):
 
         return enc_hiddens, dec_init_state
 
-    def decode(self, enc_hiddens: torch.Tensor, enc_masks: torch.Tensor,
-               dec_init_state: Tuple[torch.Tensor, torch.Tensor],
-               target_padded: torch.Tensor) -> torch.Tensor:
+    def decode(self, enc_hiddens: torch.tensor, enc_masks: torch.tensor,
+               dec_init_state: Tuple[torch.tensor, torch.tensor],
+               target_padded: torch.tensor) -> torch.tensor:
         """Compute combined output vectors for a batch.
 
         @param enc_hiddens (Tensor): Hidden states (b, src_len, h*2), where
@@ -310,7 +317,7 @@ class NMT(nn.Module):
         Y = self.target_embeddings(target_padded)
 
         # Iterate over time dimension of Y (words in a sentence) PDF HAS THIS AS [h x 1]
-        o_prev = torch.zeros(batch_size, self.hidden_size_dec)
+        o_prev = torch.zeros(batch_size, self.hidden_size_enc)
         # [20 x 5 x 3] --> [1 x 5 x 3]
         tensors_per_word = torch.split(Y, 1, 0) # [1x5x3] Splits it into # of words pieces, retaining each batch and features
 
@@ -318,23 +325,19 @@ class NMT(nn.Module):
         for i in range(len(tensors_per_word)):
             # [1 x 5 x 3] aka [1 x b x e]. EACH Y_t in the pdf is [e x 1]
             word_i = Y_t = tensors_per_word[i]
-            #   [h+e x b x 1] =  [1 x b x e] + [h x b x 1]
-            # TODO make this [b x h+e]
 
-            # Y_t: [1 x b x e]; o_prev: [b x h_dec]
+            # Y_t: [1 x b x e]; o_prev: [b x h_enc]
             Y_t_squeezed = Y_t.squeeze(0)
-            Ybar_t = torch.cat((Y_t_squeezed, o_prev), 1) # [b x e+h_dec]
+            Ybar_t = torch.cat((Y_t_squeezed, o_prev), 1) # [b x e+h_enc]
 
             #
             # STEP FUNCTION
             #
 
-            # TODO probably need enc_hiddens_proj to be a different size
-
             # PARAMS:
-            #       [b, e+h]; ([b x h], [b x h]]); [b, src_len, h*2]; [b x src_length]
+            #       [b, e+h_e]; ([b x h], [b x h]]); [b, src_len, h*2]; [b x src_length]
             # RETURNS:
-            #       1) c/h tuple [b x h], 2) combined_output [b x h], 3) e_t [b x src_len]
+            #       1) c/h tuple [b x h], 2) combined_output [b x h_e], 3) e_t [b x src_len]
 
             # TODO: hidden_states is coming out 64 instead of 128?
             hidden_states, combined_output, e_t = self.step(Ybar_t, dec_init_state, enc_hiddens, enc_hiddens_proj, enc_masks)
@@ -354,11 +357,11 @@ class NMT(nn.Module):
         # END YOUR CODE
         return combined_outputs
 
-    def step(self, Ybar_t: torch.Tensor,
-             dec_state: Tuple[torch.Tensor, torch.Tensor],
-             enc_hiddens: torch.Tensor,
-             enc_hiddens_proj: torch.Tensor,
-             enc_masks: torch.Tensor) -> Tuple[Tuple, torch.Tensor, torch.Tensor]:
+    def step(self, Ybar_t: torch.tensor,
+             dec_state: Tuple[torch.tensor, torch.tensor],
+             enc_hiddens: torch.tensor,
+             enc_hiddens_proj: torch.tensor,
+             enc_masks: torch.tensor) -> Tuple[Tuple, torch.tensor, torch.tensor]:
         """ Compute one forward step of the LSTM decoder, including the attention computation.
 
         @param Ybar_t (Tensor): Concatenated Tensor of [Y_t o_prev], with shape (b, e + h_e). The input for the decoder,
@@ -413,7 +416,7 @@ class NMT(nn.Module):
 
         # INPUTS:
         #
-        # Ybar_t: [b x (e + h_dec)]                 <-- in pdf, Y_t is [e+h_dec x 1]
+        # Ybar_t: [b x (e + h_enc)]                 <-- in pdf, Y_t is [e+h_dec x 1]
         # dec_state (OG): ([b x h_dec], [b x h_dec])
 
         # DECODER:
@@ -423,11 +426,6 @@ class NMT(nn.Module):
 
         #
         # COMPUTE E_T
-        #
-
-
-        #
-        # Compute attention e_t
         #
 
         e_t = self.attention_function(dec_hidden, enc_hiddens_proj)
@@ -484,7 +482,7 @@ class NMT(nn.Module):
         combined_output = O_t
         return dec_state, combined_output, e_t
 
-    def generate_sent_masks(self, enc_hiddens: torch.Tensor, source_lengths: List[int]) -> torch.Tensor:
+    def generate_sent_masks(self, enc_hiddens: torch.tensor, source_lengths: List[int]) -> torch.Tensor:
         """ Generate sentence masks for encoder hidden states.
 
         @param enc_hiddens (Tensor): encodings of shape (b, src_len, 2*h), where b = batch size,
@@ -654,16 +652,35 @@ class NMT(nn.Module):
     # s is h_t_dec
     # Vt * tanh(W1*s + W2*h_i)
     def calculate_additive_attention(self, dec_hidden, enc_hiddens_proj):
-        term1 = self.additive_att_projection1(dec_hidden)   # TODO define these
-        term2 = self.att_projection(term1)                  # " " "
-        e_t = torch.add(term1, term2)                       # TODO look up real add function
-        e_t = tanh(e_t)
-        # TODO: multiply this by Vt (can we even calculate that yet??)
+        b, src_len, _ = enc_hiddens_proj.size()
+        _, h_d = dec_hidden.size()
+
+        # dec_hidden [b x h_d x 1] * [b x h_d x h_d] --> [b x h_d]
+        term1 = self.additive_att_projection1(dec_hidden)
+        # [b x h_d] --> [b x 1 x h_d]
+        term1 = term1.unsqueeze(1)
+        # [b x 1 x h_d] --> [b x src_len x h_d]
+        term1 = term1.repeat(1, src_len, 1)
+        # add enc_hiddens_proj: [b x src_len x h_d]
+        term2 = enc_hiddens_proj
+
+        e_t = torch.add(term1, term2)
+        e_t = torch.nn.functional.tanh(e_t)
+
+        # [b x src_len x h_d] --> [b x src_len x 1]
+        e_t = self.additive_att_sum_projection(e_t)
+        e_t = e_t.squeeze(2)
 
         return e_t
 
-    def calculate_dot_product_attention(self, dec_hidden, enc_hiddens_proj):
-        e_t = torch.dot(dec_hidden, enc_hiddens_proj)       # TODO make this a real dot prod
-        # e = st dot hi
+    def calculate_dot_product_attention(self, dec_hidden, enc_hiddens):
+        if self.hidden_size_dec != 2 * self.hidden_size_enc:
+            raise "Decoder hidden size must be twice encoder hidden size to use dot product attention."
+
+        # dec_hidden b x h_d x 1 --> b x 1 x h_d
+        term1 = torch.transpose(dec_hidden, 1, 2)
+
+        # [b x 1 x h_d] * [2h_e x 1] = [b x 1 x 1]
+        e_t = torch.dot(term1, enc_hiddens)
 
         return e_t
