@@ -20,7 +20,7 @@ class NMT(nn.Module):
         - Unidirection LSTM Decoder
         - Global Attention Model (Luong, et al. 2015)
     """
-    def __init__(self, embed_size, hidden_size, vocab, dropout_rate=0.2):
+    def __init__(self, embed_size, hidden_size_enc, hidden_size_dec, vocab, dropout_rate=0.2):
         """ Init NMT Model.
 
         ********** IMPORTANT ***********
@@ -28,7 +28,8 @@ class NMT(nn.Module):
         methods, and the modify them as needed to make sure your model is saved correctly.
 
         @param embed_size (int): Embedding size (dimensionality)
-        @param hidden_size (int): Hidden Size (dimensionality)
+        @param hidden_size_enc (int): Hidden Size (dimensionality) of the encoder
+        @param hidden_size_dec (int): Hidden Size (dimensionality) of the decoder
         @param vocab (Vocab): Vocabulary object containing src and tgt languages
                               See vocab.py for documentation.
         @param dropout_rate (float): Dropout probability, for attention
@@ -36,7 +37,8 @@ class NMT(nn.Module):
         """
         super(NMT, self).__init__()
         self.embed_size = embed_size
-        self.hidden_size = hidden_size
+        self.hidden_size_enc = hidden_size_enc
+        self.hidden_size_dec = hidden_size_dec
         self.dropout_rate = dropout_rate
         self.vocab = vocab
 
@@ -59,20 +61,20 @@ class NMT(nn.Module):
         self.target_embeddings = nn.Embedding(len(vocab.tgt), embed_size, padding_idx=tgt_pad_token_idx)
 
         # Bidirectional LSTM with bias
-        self.encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True)
+        self.encoder = nn.LSTM(embed_size, hidden_size_enc, bidirectional=True)
         # LSTM Cell with bia
-        self.decoder = nn.LSTMCell(embed_size + hidden_size, hidden_size)
+        self.decoder = nn.LSTMCell(embed_size + hidden_size_dec, hidden_size_dec)
 
         # Linear Layer with no bias), called W_{h} in the PDF.
-        self.h_projection = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+        self.h_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
         # Linear Layer with no bias), called W_{c} in the PDF.
-        self.c_projection = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+        self.c_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
         # Linear Layer with no bias), called W_{attProj} in the PDF.
-        self.att_projection = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+        self.att_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
         # Linear Layer with no bias), called W_{u} in the PDF.
-        self.combined_output_projection = nn.Linear(hidden_size * 2 + hidden_size, hidden_size, bias=False)
+        self.combined_output_projection = nn.Linear(hidden_size_enc * 2 + hidden_size_dec, hidden_size_dec, bias=False)
         # Linear Layer with no bias), called W_{vocab} in the PDF.
-        self.target_vocab_projection = nn.Linear(hidden_size, len(vocab.tgt), bias=False)
+        self.target_vocab_projection = nn.Linear(hidden_size_dec, len(vocab.tgt), bias=False)
         # Dropout Layer
         self.dropout = nn.Dropout(self.dropout_rate)
 
@@ -104,6 +106,7 @@ class NMT(nn.Module):
         enc_hiddens, dec_init_state = self.encode(source_padded, source_lengths)
         enc_masks = self.generate_sent_masks(enc_hiddens, source_lengths)
         combined_outputs = self.decode(enc_hiddens, enc_masks, dec_init_state, target_padded)
+        # combined_outputs: (tgt_len, b,  h_out)
         P = F.log_softmax(self.target_vocab_projection(combined_outputs), dim=-1)
 
         # Zero out, probabilities for which we have nothing in the target text
@@ -115,10 +118,11 @@ class NMT(nn.Module):
         scores = target_gold_words_log_prob.sum(dim=0)
         return scores
 
+    # Called to initialize hidden states for encoder
     def _initialize_hidden(self, batch_size):
         layers = 2
         batches = batch_size
-        hidden_size = self.hidden_size
+        hidden_size = self.hidden_size_enc
         return torch.zeros(layers, batches, hidden_size)
 
     # hidden_states: [layer(2)xbatch(5)xhsize(3)]
@@ -210,10 +214,13 @@ class NMT(nn.Module):
         enc_hiddens = torch.transpose(padded_output[0], 0, 1)
 
         # Should be 5x3
+        # h_i_enc --> [32 x 128] = [bx2h_enc]
+        # h_projection should return h_dec
         init_decoder_hidden = self.h_projection(self._h_i_enc(hn))
         init_decoder_cell = self.c_projection(self._h_i_enc(cn))
 
-        # init_state should be 5x3, got 5x6
+        # init_state should be 5x6, got 5x3
+        # HERE!! TODO PROBLEM BAD
         dec_init_state = (init_decoder_hidden, init_decoder_cell)
 
         # END YOUR CODE
@@ -244,7 +251,7 @@ class NMT(nn.Module):
 
         # Initialize previous combined output vector o_{t-1} as zero
         batch_size = enc_hiddens.size(0)
-        o_prev = torch.zeros(batch_size, self.hidden_size, device=self.device)
+        o_prev = torch.zeros(batch_size, self.hidden_size_dec, device=self.device)
 
         # Initialize a list we will use to collect the combined output o_t on each step
         combined_outputs = []
@@ -279,11 +286,12 @@ class NMT(nn.Module):
         #     Tensor Stacking:
         #         https://pytorch.org/docs/stable/torch.html#torch.stack
 
+        # [b x src_len x 2h_e]
         src_len = enc_hiddens.size()[1]
         # [h x 2h] * [b x src_len x 2h] SHOULD YIELD [b x src_len x h]?
 
         #
-        # TODO check if this needs to include h_t_dec^T
+        # TODO check if this needs to include h_t_dec^T ** TODO!! START HERE!!! This needs to be [h_d x 1]
         #
         enc_hiddens_proj = self.att_projection(enc_hiddens)
 
@@ -292,7 +300,7 @@ class NMT(nn.Module):
         Y = self.target_embeddings(target_padded)
 
         # Iterate over time dimension of Y (words in a sentence) PDF HAS THIS AS [h x 1]
-        o_prev = torch.zeros(batch_size, self.hidden_size)
+        o_prev = torch.zeros(batch_size, self.hidden_size_dec)
         # [20 x 5 x 3] --> [1 x 5 x 3]
         tensors_per_word = torch.split(Y, 1, 0) # [1x5x3] Splits it into # of words pieces, retaining each batch and features
 
@@ -303,9 +311,9 @@ class NMT(nn.Module):
             #   [h+e x b x 1] =  [1 x b x e] + [h x b x 1]
             # TODO make this [b x h+e]
 
-            # Y_t: [1 x b x e]; o_prev: [b x h]
+            # Y_t: [1 x b x e]; o_prev: [b x h_dec]
             Y_t_squeezed = Y_t.squeeze(0)
-            Ybar_t = torch.cat((Y_t_squeezed, o_prev), 1) # [b x e+h]
+            Ybar_t = torch.cat((Y_t_squeezed, o_prev), 1) # [b x e+h_dec]
 
             #
             # STEP FUNCTION
@@ -317,6 +325,8 @@ class NMT(nn.Module):
             #       [b, e+h]; ([b x h], [b x h]]); [b, src_len, h*2]; [b x src_length]
             # RETURNS:
             #       1) c/h tuple [b x h], 2) combined_output [b x h], 3) e_t [b x src_len]
+
+            # TODO: hidden_states is coming out 64 instead of 128?
             hidden_states, combined_output, e_t = self.step(Ybar_t, dec_init_state, enc_hiddens, enc_hiddens_proj, enc_masks)
 
             hidden, cell = hidden_states            # hidden state from the decoder for sentence t
@@ -341,14 +351,14 @@ class NMT(nn.Module):
              enc_masks: torch.Tensor) -> Tuple[Tuple, torch.Tensor, torch.Tensor]:
         """ Compute one forward step of the LSTM decoder, including the attention computation.
 
-        @param Ybar_t (Tensor): Concatenated Tensor of [Y_t o_prev], with shape (b, e + h). The input for the decoder,
+        @param Ybar_t (Tensor): Concatenated Tensor of [Y_t o_prev], with shape (b, e + h_e). The input for the decoder,
                                 where b = batch size, e = embedding size, h = hidden size.
-        @param dec_state (tuple(Tensor, Tensor)): Tuple of tensors both with shape (b, h),
-                where b = batch size, h = hidden size.
+        @param dec_state (tuple(Tensor, Tensor)): Tuple of tensors both with shape (b, h_d),
+                where b = batch size, h_d = hidden_size_dec.
                 First tensor is decoder's prev hidden state, second tensor is decoder's prev cell.
-        @param enc_hiddens (Tensor): Encoder hidden states Tensor, with shape (b, src_len, h * 2), where b = batch size,
+        @param enc_hiddens (Tensor): Encoder hidden states Tensor, with shape (b, src_len, h_e * 2), where b = batch size,
                                     src_len = maximum source length, h = hidden size.
-        @param enc_hiddens_proj (Tensor): Encoder hidden states Tensor, projected from (h * 2) to h.
+        @param enc_hiddens_proj (Tensor): Encoder hidden states Tensor, projected from (h_e * 2) to h.
                 Tensor is with shape (b, src_len, h),
                 where b = batch size, src_len = maximum source length, h = hidden size.
         @param enc_masks (Tensor): Tensor of sentence masks shape (b, src_len),
@@ -391,7 +401,14 @@ class NMT(nn.Module):
         #     Tensor Squeeze:
         #         https://pytorch.org/docs/stable/torch.html#torch.squeeze
 
-        # Input: b x e+h, dec_state: ([b x h], [b x h])
+        # INPUTS:
+        #
+        # Ybar_t: [b x (e + h_dec)]                 <-- in pdf, Y_t is [e+h_dec x 1]
+        # dec_state (OG): ([b x h_dec], [b x h_dec])
+
+        # DECODER:
+        # self.decoder = nn.LSTMCell(embed_size + hidden_size_enc, hidden_size_dec)
+
         dec_state = dec_hidden, dec_cell = self.decoder(Ybar_t, dec_state) # ([b x h], [b x h])
 
         #
@@ -591,13 +608,14 @@ class NMT(nn.Module):
         return model
 
     def save(self, path: str):
-        """ Save the odel to a file.
+        """ Save the model to a file.
         @param path (str): path to the model
         """
 
         params = {
             'args': dict(embed_size=self.embed_size,
-                         hidden_size=self.hidden_size,
+                         hidden_size_enc=self.hidden_size_enc,
+                         hidden_size_dec=self.hidden_size_dec,
                          dropout_rate=self.dropout_rate),
             'vocab': self.vocab,
             'state_dict': self.state_dict()
