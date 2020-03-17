@@ -93,6 +93,8 @@ def train(args):
                 hidden_size_dec=args.hidden_size_dec,
                 vocab=vocab,
                 attention_function_name=args.attention,
+                use_alpha=args.use_alpha,
+                scale_grad_by_frequency=args.scale_grad_by_frequency,
                 dropout_rate=args.dropout
                 )
     model.train()
@@ -335,6 +337,7 @@ def main():
                         help="uniformly initialize all parameters")
 
     parser.add_argument("--use_alpha", default=False, type=bool)
+    parser.add_argument("--scale_grad_by_frequency", default=False, type=bool)
 
     # Other training parameters
     parser.add_argument("--log_every", default=10, type=int)

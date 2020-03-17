@@ -20,7 +20,7 @@ class NMT(nn.Module):
         - Unidirection LSTM Decoder
         - Global Attention Model (Luong, et al. 2015)
     """
-    def __init__(self, embed_size, hidden_size_enc, hidden_size_dec, vocab, attention_function_name, dropout_rate=0.2):
+    def __init__(self, embed_size, hidden_size_enc, hidden_size_dec, vocab, attention_function_name, use_alpha, scale_grad_by_frequency, dropout_rate=0.2):
         """ Init NMT Model.
 
         ********** IMPORTANT ***********
@@ -34,6 +34,8 @@ class NMT(nn.Module):
                               See vocab.py for documentation.
         @param attention_function_name (string):    One of ["MULTIPLICATIVE", "ADDITIVE",
                                                     or "DOT_PRODUCT"]
+        @param use_alpha
+        @param scale_grad_by_frequency
         @param dropout_rate (float): Dropout probability, for attention
 
         """
@@ -57,10 +59,10 @@ class NMT(nn.Module):
         self.dropout = None
 
         src_pad_token_idx = vocab.src['<pad>']
-        self.source_embeddings = nn.Embedding(len(vocab.src), embed_size, padding_idx=src_pad_token_idx)
+        self.source_embeddings = nn.Embedding(len(vocab.src), embed_size, scale_grad_by_freq=scale_grad_by_frequency, padding_idx=src_pad_token_idx)
 
         tgt_pad_token_idx = vocab.tgt['<pad>']
-        self.target_embeddings = nn.Embedding(len(vocab.tgt), embed_size, padding_idx=tgt_pad_token_idx)
+        self.target_embeddings = nn.Embedding(len(vocab.tgt), embed_size, scale_grad_by_freq=scale_grad_by_frequency, padding_idx=tgt_pad_token_idx)
 
         # Bidirectional LSTM with bias
         self.encoder = nn.LSTM(embed_size, hidden_size_enc, bidirectional=True)
@@ -74,6 +76,8 @@ class NMT(nn.Module):
             "DOT_PRODUCT":      self.calculate_dot_product_attention
         }
         self.attention_function = self.attention_switcher[attention_function_name]
+
+        self.scale_grad_by_frequency = scale_grad_by_frequency
 
         # Linear Layer with no bias), called W_{h} in the PDF.
         self.h_projection = nn.Linear(hidden_size_enc * 2, hidden_size_dec, bias=False)
@@ -93,7 +97,7 @@ class NMT(nn.Module):
         # Linear Layer with no bias), called W_{vocab} in the PDF.
         self.target_vocab_projection = nn.Linear(hidden_size_enc, len(vocab.tgt), bias=False)
         # Dropout Layer
-        if args.use_alpha:
+        if use_alpha:
             self.dropout = torch.nn.functional.alpha_dropout
         else:
             self.dropout = nn.Dropout(self.dropout_rate)

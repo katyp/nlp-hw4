@@ -9,3 +9,5 @@ python main.py --mode train --model_path model.bin --patience 10 --lr_decay 0.6 
 python main.py --mode train --model_path model.bin --patience 3 --lr_decay 0.4 > test-g-output.txt
 
 python main.py --mode train --model_path model.bin --batch 100 --max_epoch 30 > test-h-output.txt
+
+python main.py --mode train --model_path model.bin --scale_grad_by_frequency True > test-i-output.txt
