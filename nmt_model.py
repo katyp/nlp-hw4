@@ -93,7 +93,10 @@ class NMT(nn.Module):
         # Linear Layer with no bias), called W_{vocab} in the PDF.
         self.target_vocab_projection = nn.Linear(hidden_size_enc, len(vocab.tgt), bias=False)
         # Dropout Layer
-        self.dropout = nn.Dropout(self.dropout_rate)
+        if args.use_alpha:
+            self.dropout = torch.nn.functional.alpha_dropout
+        else:
+            self.dropout = nn.Dropout(self.dropout_rate)
 
     def forward(self, source: List[List[str]], target: List[List[str]]) -> torch.tensor:
         """ Take a mini-batch of source and target sentences, compute the log-likelihood of

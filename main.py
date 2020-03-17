@@ -334,6 +334,8 @@ def main():
     parser.add_argument("--uniform_init", default=0.1, type=float,
                         help="uniformly initialize all parameters")
 
+    parser.add_argument("--use_alpha", default=False, type=bool)
+
     # Other training parameters
     parser.add_argument("--log_every", default=10, type=int)
     parser.add_argument("--seed", default=123, type=int)
