@@ -308,9 +308,10 @@ class NMT(nn.Module):
         # [h x 2h] * [b x src_len x 2h] SHOULD YIELD [b x src_len x h]?
 
         #
-        # TODO check if this needs to include h_t_dec^T ** TODO!! START HERE!!! This needs to be [h_d x 1]
-        #
-        enc_hiddens_proj = self.att_projection(enc_hiddens)
+        if self.attention_function == self.calculate_dot_product_attention:
+            enc_hiddens_proj = enc_hiddens
+        else:
+            enc_hiddens_proj = self.att_projection(enc_hiddens)
 
         # Associate sentences from target_padded with their embeddings
         # [tgt_length x b] --> [tgt_len x b x e] (20 words x 5 batches x 3 features)
@@ -673,14 +674,21 @@ class NMT(nn.Module):
 
         return e_t
 
+    # enc_hiddens: [b x src_len x 2h_e]
+    # dec_hidden:  [b x h_d]
     def calculate_dot_product_attention(self, dec_hidden, enc_hiddens):
+        _, src_len, _ = enc_hiddens.size()
+
         if self.hidden_size_dec != 2 * self.hidden_size_enc:
             raise "Decoder hidden size must be twice encoder hidden size to use dot product attention."
 
-        # dec_hidden b x h_d x 1 --> b x 1 x h_d
-        term1 = torch.transpose(dec_hidden, 1, 2)
+        # Dot-prod every enc_hidden batch and word [1 x 1 x 2h_e] with
+        # every dec_hidden batch [1 x h_d]
 
-        # [b x 1 x h_d] * [2h_e x 1] = [b x 1 x 1]
-        e_t = torch.dot(term1, enc_hiddens)
+        # b x h_d --> b x h_d x 1
+        term2 = dec_hidden.unsqueeze(2)
+        # [b x src_len x 2h_e] * [b x h_d x 1] --> [b x src_len x 1]
+        e_t = torch.bmm(enc_hiddens, term2)
+        e_t = e_t.squeeze(2)
 
         return e_t
