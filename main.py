@@ -97,6 +97,7 @@ def train(args):
                 scale_grad_by_frequency=args.scale_grad_by_frequency,
                 dropout_rate=args.dropout
                 )
+
     model.train()
 
     if np.abs(args.uniform_init) > 0.:

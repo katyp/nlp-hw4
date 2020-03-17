@@ -76,6 +76,7 @@ class NMT(nn.Module):
             "DOT_PRODUCT":      self.calculate_dot_product_attention
         }
         self.attention_function = self.attention_switcher[attention_function_name]
+        self.attention_function_name = attention_function_name
 
         self.scale_grad_by_frequency = scale_grad_by_frequency
 
@@ -97,6 +98,7 @@ class NMT(nn.Module):
         # Linear Layer with no bias), called W_{vocab} in the PDF.
         self.target_vocab_projection = nn.Linear(hidden_size_enc, len(vocab.tgt), bias=False)
         # Dropout Layer
+        self.use_alpha = use_alpha
         if use_alpha:
             self.dropout = torch.nn.functional.alpha_dropout
         else:
@@ -519,12 +521,12 @@ class NMT(nn.Module):
 
         src_encodings, dec_init_vec = self.encode(src_sents_var, [len(src_sent)])
         if self.att_projection is None:
-            src_encodings_att_linear = None
+            src_encodings_att_linear = src_encodings
         else:
             src_encodings_att_linear = self.att_projection(src_encodings)
 
         h_tm1 = dec_init_vec
-        att_tm1 = torch.zeros(1, self.hidden_size, device=self.device)
+        att_tm1 = torch.zeros(1, self.hidden_size_enc, device=self.device)
 
         hypotheses = [['<s>']]
         hyp_scores = torch.zeros(len(hypotheses), dtype=torch.float, device=self.device)
@@ -631,6 +633,9 @@ class NMT(nn.Module):
             'args': dict(embed_size=self.embed_size,
                          hidden_size_enc=self.hidden_size_enc,
                          hidden_size_dec=self.hidden_size_dec,
+                         attention_function_name=self.attention_function_name,
+                         use_alpha=self.use_alpha,
+                         scale_grad_by_frequency=self.scale_grad_by_frequency,
                          dropout_rate=self.dropout_rate),
             'vocab': self.vocab,
             'state_dict': self.state_dict()
